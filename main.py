@@ -10,6 +10,12 @@ app = FastAPI()
 
 app.include_router(router)
 
+@app.get("/")
+async def home():
+    return {"message" : "Magic Convert - A simple API built using FastAPI that allows for converting CSV files to JSON and vice versa."}
+
+
+
 @app.post("/convert")
 async def convert(file: UploadFile, db: Session = Depends(get_db)):
     try:
