@@ -1,54 +1,107 @@
-from fastapi import FastAPI, UploadFile, HTTPException,status
-import pandas as pd
+from fastapi import FastAPI, UploadFile, HTTPException, status, Depends
+from database import get_db, ParsedData
+from models import UserDataIn
+from sqlalchemy.orm import Session
 from io import StringIO
-from route import router as r
+import pandas as pd
+from route import router
 
 app = FastAPI()
 
-app.include_router(r)
-
-@app.get("/")
-async def home():
-    return {"Message" : "Welcome to magic covert. Go to /convert to convert files."}
-
+app.include_router(router)
 
 @app.post("/convert")
-async def convert(file: UploadFile):
-    # If the file is json
-    if file.content_type == "application/json":
-        # Reading the json file
-        json_data = await file.read()
+async def convert(file: UploadFile, db: Session = Depends(get_db)):
+    try:
+        # If file type is application/json
+        if file.content_type == "application/json":
 
-        # Converting to json string
-        json_string = json_data.decode()
-        
-        # To pandas dataframe to easily convert to csv
-        df = pd.read_json(json_string)
+            # Reading the JSON data
+            json_data = await file.read()
 
-        # Converting to csv and saving the file
-        df.to_csv('data.csv', encoding='utf-8', index=False)
+            # Parsing the JSON data to JSON string
+            json_string = json_data.decode()
 
-        return {'message' : 'Sucessfully converted to csv file.'}
+            # From JSON string to pandas dataframe
+            df = pd.read_json(StringIO(json_string))
 
-    elif file.content_type == "text/csv":
-        # If the file is csv
-        if file.content_type == "text/csv":
-            # Reading the csv file
+            # Converting to csv and saving the file
+            df.to_csv('data/data.csv', encoding='utf-8', index=False)
+
+            # Validate and insert the data
+            try:
+                for _, row in df.iterrows():
+
+                    # Validate the input data with Pydantic model
+                    user_data = UserDataIn(**row.to_dict())
+
+                    # User data to sql model
+                    new_entry = ParsedData(
+                        name=user_data.name,
+                        language=user_data.language,
+                        user_id=user_data.user_id,
+                        bio=user_data.bio,
+                        version=user_data.version
+                    )
+
+                    # Add the new entry
+                    db.add(new_entry)
+
+                # Commit the changes
+                db.commit()
+
+            except Exception as e:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Data insertion failed: {e}")
+            
+            return {"message": "Successfully parsed and saved JSON data."}
+
+        # If the file type is csv
+        elif file.content_type == "text/csv":
+
+            # Reading the CSV data
             csv_data = await file.read()
-  
-            # to csv string
+
+            # Parsing the CSV data
             csv_str = csv_data.decode('utf-8')
 
-            # To csv buffer as pandas need buffer
-            csv_buffer = StringIO(csv_str)
- 
-            # To pandas data frame from buffer
-            df = pd.read_csv(csv_buffer)
-        
+            # From csv to pandas dataframe
+            df = pd.read_csv(StringIO(csv_str))
+            
             # To json and saving the file
-            df.to_json('data.json', orient='records', indent=4)
+            df.to_json('data/data.json', orient='records', indent=4)
+            
+            # Validate and insert the data
+            try:
+                for _, row in df.iterrows():
+
+                    # Validate the input data with Pydantic model
+                    user_data = UserDataIn(**row.to_dict())
+
+                    # Insert the validated data into the database
+                    to_insert = ParsedData(
+                        name=user_data.name,
+                        language=user_data.language,
+                        user_id=user_data.user_id,
+                        bio=user_data.bio,
+                        version=user_data.version
+                    )
+
+                    # Add new entry
+                    db.add(to_insert)
+                
+                # Commit the changes
+                db.commit()
+
+            except Exception as e:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Data insertion failed: {e}")
+            
+            return {"message": "Successfully parsed and saved CSV data."}
+
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file type. Only supported - JSON or CSV.")
+
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Something Went Wrong: {e}")
+
+
     
-            return {'message' : 'Sucessfully converted to json file.'}
-    
-    else:
-        raise HTTPException(status_code = status.HTTP_400_BAD_REQUEST,detail = 'Invalid file type. Only supported - json or csv.')
